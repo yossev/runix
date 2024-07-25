@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,68 +9,47 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// SetupRoutes initializes the API routes
-func SetupRoutes(r *mux.Router) {
-	r.HandleFunc("/execute", executeHandler).Methods("POST")
+// ** API HANDLER ** //
+
+func main() {
+	router := mux.NewRouter()
+
+	router.HandleFunc("/execute", executeHandler).Methods("GET")
+
+	// Start the server
+	fmt.Println("Server started at http://localhost:8080")
+	http.ListenAndServe(":8080", router)
 }
 
-func TempFileCreator(filename string, data interface{}) (string, error) {
-	// ... create temporary file ...
-
-	file, err := os.Create(filename)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	err = encoder.Encode(data)
-	if err != nil {
-		return "", err
-	}
-
-	return filePath, nil
-}
-
+// handler called when excute endpoint is hit
 func executeHandler(w http.ResponseWriter, r *http.Request) {
-	var requestBody map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+	language := r.URL.Query().Get("language")
+	code := r.URL.Query().Get("code")
+
+	if language == "" || code == "" {
+		http.Error(w, "Missing 'language' or 'code' parameter", http.StatusBadRequest)
 		return
 	}
-
-	code, ok := requestBody["code"]
-	if !ok {
-		http.Error(w, "Missing 'code' field", http.StatusBadRequest)
-		return
-	}
-
-	language, ok := requestBody["language"]
-
-	if !ok {
-		http.Error(w, "Missing 'Language' field", http.StatusBadRequest)
-	}
-	if language == "python" {
-		TempFileCreator("file.py")
-		cmd, err := exec.Command("/bin/sh", "executors/python.sh")
-
+	// THIS FUNCTION ISNT APPLYING SOLID YET!, FUNCTION ALSO HANDLES FILE CREATION
+	if language == "Python" {
+		tmpFile, err := os.Create("file.py")
 		if err != nil {
-			fmt.Println("Error %s", err)
-
+			fmt.Println("%s: Cannot create temp file", err)
 		}
+		defer tmpFile.Close()
+		defer os.Remove(tmpFile.Name())
 
+		// write the code in the temp file
+		if _, err := tmpFile.Write([]byte(code)); err != nil {
+			http.Error(w, "Could not write to temporary file", http.StatusInternalServerError)
+			return
+		}
+		cmd := exec.Command("./executors/python.sh", tmpFile.Name())
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Execution error: %s", err), http.StatusInternalServerError)
+			return
+		}
+		w.Write(output)
 	}
-
-	// handle response
-	response := map[string]string{
-		"result": result,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-	err := writeResponseToFile("output.txt", response)
-	if err != nil {
-		fmt.Println("Error: %s", err)
-	}
-
 }
