@@ -4,24 +4,38 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-
-	"github.com/gorilla/mux"
+	"strings"
 )
 
 // ** API HANDLER ** //
-
 func main() {
-	router := mux.NewRouter()
-	router.HandleFunc("/execute", executeHandler).Methods("POST")
+	code := `
+def hello_world():
+    print("Hello, world!")
 
-	// Start the server
-	fmt.Println("Server started at http://localhost:8080")
-	http.ListenAndServe(":8080", router)
+hello_world()
+`
+	encodedCode := url.QueryEscape(code)
+	data := url.Values{}
+	data.Set("code", encodedCode)
+
+	resp, err := http.Post("http://localhost:8080/execute", "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	// Print the response from the server
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(body))
 }
 
-// handler called when execute endpoint is hit
 func executeHandler(w http.ResponseWriter, r *http.Request) {
 	language := r.URL.Query().Get("language")
 
@@ -30,55 +44,32 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form to handle file upload
-	err := r.ParseMultipartForm(10 << 20) // 10 MB limit
+	err := r.ParseForm()
 	if err != nil {
-		http.Error(w, "Unable to parse form", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	file, _, err := r.FormFile("code")
+	encodedCode := r.FormValue("code")
+	decodedCode, err := url.QueryUnescape(encodedCode)
 	if err != nil {
-		http.Error(w, "Unable to get file from form", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
 
-	tmpFile, err := os.CreateTemp("", "code_*.py") // Create a temp file with appropriate extension
+	fileName := "code.py"
+	err = os.WriteFile(fileName, []byte(decodedCode), 0644)
 	if err != nil {
-		http.Error(w, "Unable to create temp file", http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(tmpFile.Name()) // Clean up
-
-	// Write the uploaded code to the temp file
-	_, err = io.Copy(tmpFile, file)
-	if err != nil {
-		http.Error(w, "Unable to write to temp file", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Ensure the file is readable
-	if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
-		http.Error(w, "Unable to set file permissions", http.StatusInternalServerError)
-		return
-	}
-
-	// Execute the code based on the language
-	var cmd *exec.Cmd
-	if language == "Python" {
-		cmd = exec.Command("./executors/python.sh", tmpFile.Name())
-	} else {
-		http.Error(w, "Unsupported language", http.StatusBadRequest)
-		return
-	}
-
+	// Execute the code
+	cmd := exec.Command("python3", fileName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Execution error: %s", err), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "text/plain")
 	w.Write(output)
 }
